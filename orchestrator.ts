@@ -21,7 +21,8 @@ export const orchestrator = {
     query: string,
     activeAgentIds: AgentId[],
     mode: "analysis" | "action",
-    onLog: (msg: string) => void
+    onLog: (msg: string) => void,
+    previousReport?: FusedReport | null
   ): Promise<FusedReport> {
     const apiKey = getApiKey();
     if (!apiKey) throw new Error("API_KEY_MISSING");
@@ -32,13 +33,30 @@ export const orchestrator = {
 
     onLog(`INITIALIZING_SWARM :: ${mode.toUpperCase()} MODE`);
 
+    // Prepare Context from Previous Run (if any)
+    let historyContext = "";
+    if (previousReport) {
+      historyContext = `
+      --- PREVIOUS REPORT CONTEXT (ID: ${previousReport.id}) ---
+      OVERVIEW: ${previousReport.overview}
+      ARCHITECTURE: ${previousReport.architectureAndIntegrations}
+      RISKS: ${previousReport.keyRisks}
+      MINORITY REPORTS: ${previousReport.minorityReports.map(m => m.details).join(' | ')}
+      ACTIONS: ${previousReport.nextActionsForHuman}
+      EXECUTIVE SUMMARY: ${previousReport.executiveSummary}
+      --- END PREVIOUS CONTEXT ---
+      
+      USER FOLLOW-UP:
+      `;
+    }
+
     // 1. Parallel Agent Execution
     const activeAgents = AGENTS.filter(a => activeAgentIds.includes(a.id));
     const agentPromises = activeAgents.map(async (agent) => {
       try {
         const response = await ai.models.generateContent({
           model: modelName,
-          contents: [{ parts: [{ text: `USER QUERY: ${query}` }] }],
+          contents: [{ parts: [{ text: `${historyContext} USER QUERY: ${query}` }] }],
           config: { systemInstruction: agent.systemInstruction }
         });
         return { 
@@ -65,31 +83,39 @@ export const orchestrator = {
       CONTEXT (Individual Agent Thoughts):
       ${contextBlock}
 
+      ${historyContext ? 'PREVIOUS REPORT CONTEXT IS AVAILABLE ABOVE.' : ''}
       USER QUERY: "${query}"
-      CURRENT MODE: ${mode}
+      CURRENT MODE: "${mode}"
 
       --------------------------------------------------
-      GLOBAL OUTPUT FORMAT (BOTH MODES)
+      CORE BEHAVIOR
       --------------------------------------------------
-      You always produce a **Fused Intelligence Report**.
+      You MUST:
+      - Re-evaluate the situation based on the agent inputs and user query.
+      - Produce a FULL new FCC report with ALL required sections.
+      - In ACTION MODE, also produce machine-readable \`proposedActions\` JSON.
+
+      --------------------------------------------------
+      STRUCTURED FCC REPORT – MANDATORY SECTIONS
+      --------------------------------------------------
       You MUST output **exactly these seven section headers**, in this exact order, ALL CAPS, each on its own line, followed by a blank line, with content underneath each:
 
-      OVERVIEW
+      1. OVERVIEW
+      2. ARCHITECTURE & INTEGRATIONS
+      3. KEY FEATURES & WORKFLOWS
+      4. KEY RISKS
+      5. MINORITY REPORTS
+      6. NEXT ACTIONS
+      7. EXECUTIVE SUMMARY
 
-      ARCHITECTURE & INTEGRATIONS
-
-      KEY FEATURES & WORKFLOWS
-
-      KEY RISKS
-
-      MINORITY REPORTS
-      (Explicitly describe disagreements between ALPHA, BETA, OMEGA. If none, say "None".)
-
-      NEXT ACTIONS
-      (Human-level next steps, e.g. "Schedule X", "Draft Y". Natural language only.)
-
-      EXECUTIVE SUMMARY
-      (A concise summary. This must be the LAST textual section.)
+      **SECTION GUIDELINES:**
+      - **OVERVIEW**: What is the tension or decision? (1-3 paragraphs)
+      - **ARCHITECTURE & INTEGRATIONS**: System design, data flow, relevant files (e.g. types.ts, config.ts). Do not hallucinate libraries.
+      - **KEY FEATURES & WORKFLOWS**: Concrete workflows. Who does what? Through which UI?
+      - **KEY RISKS**: Technical, Security, Ethical, Operational, UX.
+      - **MINORITY REPORTS**: Explicit disagreements between ALPHA (Architecture), BETA (UX/Vision), OMEGA (Ethics/Safety).
+      - **NEXT ACTIONS**: Human-level steps (docs, meetings, decisions). Natural language only.
+      - **EXECUTIVE SUMMARY**: 5-10 bullets summarizing the decision. This must be the LAST textual section.
 
       --------------------------------------------------
       MODE SPECIFIC INSTRUCTIONS
@@ -103,7 +129,7 @@ export const orchestrator = {
       JSON Shape:
       proposedActions: [
         {
-          "id": "string-id",
+          "id": "short-unique-id",
           "type": "document" | "config" | "migration" | "job" | "webhook" | "other",
           "target": "github" | "supabase" | "notion" | "email" | "log" | "other",
           "shortDescription": "Human-readable action summary",
@@ -112,7 +138,10 @@ export const orchestrator = {
         }
       ]
       
-      You MUST NOT output any extra text after the JSON block.
+      Rules:
+      - Use small, concrete actions (e.g. "Create Supabase migration", "Update types.ts").
+      - Be consistent with Next.js/Supabase stack.
+      - You MUST NOT output any extra text after the JSON block.
       ` : `
       **ANALYSIS MODE ACTIVE**
       
@@ -120,6 +149,15 @@ export const orchestrator = {
       You MUST NOT output any "proposedActions" JSON.
       Stop immediately after the EXECUTIVE SUMMARY.
       `}
+      
+      --------------------------------------------------
+      PRIORITIES & TONE
+      --------------------------------------------------
+      1. Human safety & dignity (especially workers).
+      2. Legal/Regulatory compliance.
+      3. Data correctness.
+      4. Maintainability (small team).
+      5. Premium, trustworthy UX.
     `;
 
     onLog("SYNTHESIS_ENGINE :: PROCESSING VECTORS...");
@@ -140,13 +178,21 @@ export const orchestrator = {
     
     // Helper to extract section content
     const getSection = (header: string, nextHeader?: string) => {
-      const start = synthesisText.indexOf(header);
-      if (start === -1) return "";
-      const contentStart = start + header.length;
+      // Normalize to find the header (handle potential numbering "1. OVERVIEW" vs "OVERVIEW")
+      const regex = new RegExp(`(?:^|\\n)(?:\\d+\\.\\s*)?${header}(?:\\r?\\n|$)`, 'i');
+      const match = synthesisText.match(regex);
+      
+      if (!match || match.index === undefined) return "";
+      
+      const contentStart = match.index + match[0].length;
       
       let end = -1;
       if (nextHeader) {
-        end = synthesisText.indexOf(nextHeader);
+        const nextRegex = new RegExp(`(?:^|\\n)(?:\\d+\\.\\s*)?${nextHeader}(?:\\r?\\n|$)`, 'i');
+        const nextMatch = synthesisText.match(nextRegex);
+        if (nextMatch && nextMatch.index !== undefined) {
+          end = nextMatch.index;
+        }
       } else {
         // For the last section (Executive Summary)
         // If Action Mode, stop before "proposedActions:"
@@ -182,6 +228,7 @@ export const orchestrator = {
     if (mode === 'action') {
       try {
         // Find the array part of proposedActions: [...]
+        // More robust regex to catch the JSON array even if there are slight format variations
         const jsonMatch = synthesisText.match(/proposedActions:\s*(\[\s*\{[\s\S]*\}\s*\])/);
         if (jsonMatch && jsonMatch[1]) {
           const parsed = JSON.parse(jsonMatch[1]);

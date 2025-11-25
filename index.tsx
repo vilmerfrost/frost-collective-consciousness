@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { createRoot } from 'react-dom/client';
 import { FCC_THEME, AGENTS } from './config';
 import { FusedReport, AgentId, ProposedAction, MinorityReport } from './types';
@@ -28,7 +28,8 @@ const ICONS = {
   chevronRight: "M9 18l6-6-6-6",
   chevronLeft: "M15 19l-7-7 7-7",
   loader: "M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83",
-  download: "M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4 M7 10l5 5 5-5 M12 15V3"
+  download: "M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4 M7 10l5 5 5-5 M12 15V3",
+  send: "M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"
 };
 
 // --- STYLES ---
@@ -170,6 +171,10 @@ function App() {
   
   const [executing, setExecuting] = useState(false);
   const [uiActions, setUiActions] = useState<ProposedAction[]>([]);
+  
+  // Follow up input state
+  const [followUpQuery, setFollowUpQuery] = useState('');
+  const reportEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     storage.listRecentReports().then(setHistory);
@@ -185,14 +190,34 @@ function App() {
     setLogs(prev => [`${new Date().toLocaleTimeString().split(' ')[0]} :: ${msg}`, ...prev.slice(0, 8)]);
   };
 
-  const handleRun = async () => {
-    if (!query.trim() || isProcessing) return;
+  const handleRun = async (textOverride?: string) => {
+    const inputText = textOverride || query;
+    if (!inputText.trim() || isProcessing) return;
+    
     setIsProcessing(true);
+    
+    // If we have a current report, we are doing a follow-up.
+    // Store it as previous context before we wipe the UI for the new run.
+    const previousContext = report; 
+
     setReport(null);
     setUiActions([]);
     setLogs([]);
+    
+    // Clear inputs
+    setQuery('');
+    setFollowUpQuery('');
+
     try {
-      const result = await orchestrator.runCollective(query, activeAgentIds, mode, addLog);
+      // Pass previousContext to orchestrator
+      const result = await orchestrator.runCollective(
+        inputText, 
+        activeAgentIds, 
+        mode, 
+        addLog, 
+        previousContext
+      );
+      
       setReport(result);
       const newHistory = [result, ...history];
       setHistory(newHistory);
@@ -379,10 +404,16 @@ function App() {
                 value={query}
                 onChange={e => setQuery(e.target.value)}
                 disabled={isProcessing}
+                onKeyDown={e => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    handleRun();
+                  }
+                }}
               />
 
               <button 
-                onClick={handleRun}
+                onClick={() => handleRun()}
                 disabled={isProcessing || !query.trim()}
                 className="bg-cyan-600 hover:bg-cyan-500 text-white py-3 rounded-lg font-bold text-[11px] tracking-widest uppercase transition-all shadow-[0_0_20px_rgba(8,145,178,0.4)] disabled:opacity-50 disabled:shadow-none border border-cyan-400/20"
               >
@@ -404,110 +435,144 @@ function App() {
                 </div>
               </div>
             ) : (
-              <div className="flex-1 overflow-y-auto p-10 scroll-smooth">
-                {/* Report Header */}
-                <div className="flex justify-between items-start border-b border-white/10 pb-6 mb-8">
-                  <div>
-                    <h1 className="text-2xl font-bold text-white mb-2">Fused Intelligence Report</h1>
-                    <div className="flex gap-4 text-[11px] font-mono text-slate-500 uppercase items-center">
-                      <span>ID: {report.id.slice(0,8)}</span>
-                      <span className="text-cyan-500">Confidence: {report.confidence}%</span>
-                      <span className={report.mode === 'action' ? "text-red-400" : "text-slate-500"}>MODE: {report.mode}</span>
-                      
-                      {/* Markdown Download Button */}
-                      <button 
-                        onClick={downloadMarkdown}
-                        className="ml-4 flex items-center gap-1.5 text-slate-400 hover:text-white transition-colors border-l border-white/10 pl-4"
-                        title="Download Markdown Report"
-                      >
-                         <Icon path={ICONS.download} size={14} />
-                         <span className="text-[10px] font-bold">MD</span>
-                      </button>
-                    </div>
-                  </div>
-                  <div className="flex -space-x-2">
-                    {report.participatingAgents.map(aid => {
-                       const agent = AGENTS.find(a => a.id === aid);
-                       return (
-                         <div key={aid} className="w-8 h-8 rounded-full bg-slate-900 border border-slate-700 flex items-center justify-center text-xs relative z-10 shadow-lg" style={{color: agent?.color}}>
-                           {agent?.icon}
-                         </div>
-                       )
-                    })}
-                  </div>
-                </div>
-
-                {/* Standardized Sections */}
-                <div className="max-w-4xl mx-auto pb-10">
-                    <ReportSection title="Overview" content={report.overview} />
-                    
-                    <div className="grid grid-cols-2 gap-8 my-8">
-                      <ReportSection title="Architecture & Integrations" content={report.architectureAndIntegrations} />
-                      <ReportSection title="Key Features & Workflows" content={report.keyFeaturesAndWorkflows} />
-                    </div>
-                    
-                    <ReportSection title="Key Risks" content={report.keyRisks} />
-
-                    {/* Minority Reports */}
-                    {report.minorityReports.length > 0 && (
-                      <div className="my-10">
-                         <div className="grid grid-cols-1 gap-4">
-                          {report.minorityReports.map((mr, i) => <MinorityReportCard key={i} report={mr} />)}
-                        </div>
+              <>
+                <div className="flex-1 overflow-y-auto p-10 pb-32 scroll-smooth">
+                  {/* Report Header */}
+                  <div className="flex justify-between items-start border-b border-white/10 pb-6 mb-8">
+                    <div>
+                      <h1 className="text-2xl font-bold text-white mb-2">Fused Intelligence Report</h1>
+                      <div className="flex gap-4 text-[11px] font-mono text-slate-500 uppercase items-center">
+                        <span>ID: {report.id.slice(0,8)}</span>
+                        <span className="text-cyan-500">Confidence: {report.confidence}%</span>
+                        <span className={report.mode === 'action' ? "text-red-400" : "text-slate-500"}>MODE: {report.mode}</span>
+                        
+                        {/* Markdown Download Button */}
+                        <button 
+                          onClick={downloadMarkdown}
+                          className="ml-4 flex items-center gap-1.5 text-slate-400 hover:text-white transition-colors border-l border-white/10 pl-4"
+                          title="Download Markdown Report"
+                        >
+                          <Icon path={ICONS.download} size={14} />
+                          <span className="text-[10px] font-bold">MD</span>
+                        </button>
                       </div>
-                    )}
-
-                    <ReportSection title="Next Actions" content={report.nextActionsForHuman} />
-                    
-                    <div className="mt-8 mb-12 p-6 bg-slate-900/50 rounded-lg border border-white/5">
-                      <ReportSection title="Executive Summary" content={report.executiveSummary} />
                     </div>
+                    <div className="flex -space-x-2">
+                      {report.participatingAgents.map(aid => {
+                        const agent = AGENTS.find(a => a.id === aid);
+                        return (
+                          <div key={aid} className="w-8 h-8 rounded-full bg-slate-900 border border-slate-700 flex items-center justify-center text-xs relative z-10 shadow-lg" style={{color: agent?.color}}>
+                            {agent?.icon}
+                          </div>
+                        )
+                      })}
+                    </div>
+                  </div>
 
-                    {/* Action Log (Only in ACTION mode AND if Actions exist) */}
-                    {report.mode === 'action' && uiActions.length > 0 && (
-                      <div className="mt-12 border border-white/10 rounded-lg overflow-hidden bg-slate-900/40">
-                        <div className="bg-white/5 px-4 py-3 flex justify-between items-center border-b border-white/5">
-                          <span className="text-[11px] font-bold text-slate-400 uppercase tracking-widest flex items-center gap-2">
-                            <Icon path={ICONS.cloud} size={14} />
-                            Cloud Action Pipeline
-                          </span>
-                          <div className="flex gap-2">
-                            <button 
-                              onClick={() => handleActions(true)} 
-                              disabled={executing}
-                              className="text-[10px] font-bold text-cyan-400 hover:text-white border border-cyan-500/30 px-3 py-1.5 rounded hover:bg-cyan-500/10 transition-all disabled:opacity-50"
-                            >
-                              {executing ? 'PROCESSING...' : 'SIMULATE'}
-                            </button>
-                            <button 
-                              onClick={() => handleActions(false)}
-                              disabled={executing}
-                              className="text-[10px] font-bold text-white bg-red-600 hover:bg-red-500 px-3 py-1.5 rounded transition-all disabled:opacity-50 shadow-lg shadow-red-900/20"
-                            >
-                              EXECUTE
-                            </button>
+                  {/* Standardized Sections */}
+                  <div className="max-w-4xl mx-auto pb-10">
+                      <ReportSection title="Overview" content={report.overview} />
+                      
+                      <div className="grid grid-cols-2 gap-8 my-8">
+                        <ReportSection title="Architecture & Integrations" content={report.architectureAndIntegrations} />
+                        <ReportSection title="Key Features & Workflows" content={report.keyFeaturesAndWorkflows} />
+                      </div>
+                      
+                      <ReportSection title="Key Risks" content={report.keyRisks} />
+
+                      {/* Minority Reports */}
+                      {report.minorityReports.length > 0 && (
+                        <div className="my-10">
+                          <div className="grid grid-cols-1 gap-4">
+                            {report.minorityReports.map((mr, i) => <MinorityReportCard key={i} report={mr} />)}
                           </div>
                         </div>
-                        <div className="divide-y divide-white/5">
-                          {uiActions.map((action, i) => (
-                            <ActionRow key={i} action={action} />
-                          ))}
+                      )}
+
+                      <ReportSection title="Next Actions" content={report.nextActionsForHuman} />
+                      
+                      <div className="mt-8 mb-12 p-6 bg-slate-900/50 rounded-lg border border-white/5">
+                        <ReportSection title="Executive Summary" content={report.executiveSummary} />
+                      </div>
+
+                      {/* Action Log */}
+                      {report.mode === 'action' && uiActions.length > 0 && (
+                        <div className="mt-12 border border-white/10 rounded-lg overflow-hidden bg-slate-900/40">
+                          <div className="bg-white/5 px-4 py-3 flex justify-between items-center border-b border-white/5">
+                            <span className="text-[11px] font-bold text-slate-400 uppercase tracking-widest flex items-center gap-2">
+                              <Icon path={ICONS.cloud} size={14} />
+                              Cloud Action Pipeline
+                            </span>
+                            <div className="flex gap-2">
+                              <button 
+                                onClick={() => handleActions(true)} 
+                                disabled={executing}
+                                className="text-[10px] font-bold text-cyan-400 hover:text-white border border-cyan-500/30 px-3 py-1.5 rounded hover:bg-cyan-500/10 transition-all disabled:opacity-50"
+                              >
+                                {executing ? 'PROCESSING...' : 'SIMULATE'}
+                              </button>
+                              <button 
+                                onClick={() => handleActions(false)}
+                                disabled={executing}
+                                className="text-[10px] font-bold text-white bg-red-600 hover:bg-red-500 px-3 py-1.5 rounded transition-all disabled:opacity-50 shadow-lg shadow-red-900/20"
+                              >
+                                EXECUTE
+                              </button>
+                            </div>
+                          </div>
+                          <div className="divide-y divide-white/5">
+                            {uiActions.map((action, i) => (
+                              <ActionRow key={i} action={action} />
+                            ))}
+                          </div>
                         </div>
-                      </div>
-                    )}
-                    
-                    {report.mode === 'action' && uiActions.length === 0 && (
-                      <div className="mt-12 text-center text-slate-500 text-xs italic p-4 border border-dashed border-white/10 rounded-lg">
-                        No cloud actions proposed by the collective for this run.
-                      </div>
-                    )}
+                      )}
+                      
+                      {report.mode === 'action' && uiActions.length === 0 && (
+                        <div className="mt-12 text-center text-slate-500 text-xs italic p-4 border border-dashed border-white/10 rounded-lg">
+                          No cloud actions proposed by the collective for this run.
+                        </div>
+                      )}
+                      <div ref={reportEndRef} />
+                  </div>
                 </div>
-              </div>
+
+                {/* --- FOLLOW-UP INPUT BAR (Like standard LLMs) --- */}
+                <div className="absolute bottom-0 left-0 right-0 bg-slate-950/80 backdrop-blur-md border-t border-white/10 p-4 flex gap-3 items-center z-40">
+                  <div className="flex-1 relative">
+                    <input 
+                      type="text" 
+                      className="w-full bg-slate-900/80 border border-white/10 rounded-lg px-4 py-3 text-xs text-slate-200 focus:outline-none focus:border-cyan-500/50 font-mono shadow-inner"
+                      placeholder="Enter follow-up directive or implementation request..."
+                      value={followUpQuery}
+                      onChange={(e) => setFollowUpQuery(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          handleRun(followUpQuery);
+                        }
+                      }}
+                      disabled={isProcessing}
+                    />
+                    {isProcessing && (
+                      <div className="absolute right-3 top-3">
+                         <Icon path={ICONS.loader} size={16} className="text-cyan-400 animate-spin-fast" />
+                      </div>
+                    )}
+                  </div>
+                  <button 
+                    onClick={() => handleRun(followUpQuery)}
+                    disabled={isProcessing || !followUpQuery.trim()}
+                    className="bg-cyan-600 hover:bg-cyan-500 text-white p-3 rounded-lg transition-all shadow-lg shadow-cyan-900/20 disabled:opacity-50 disabled:shadow-none"
+                  >
+                    <Icon path={ICONS.send} size={16} />
+                  </button>
+                </div>
+              </>
             )}
 
             {/* Live Logs */}
             {isProcessing && (
-              <div className="absolute bottom-4 left-4 right-4 h-32 bg-black/80 backdrop-blur rounded-lg border border-cyan-900/30 p-4 font-mono text-[10px] overflow-y-auto shadow-2xl z-50">
+              <div className="absolute top-4 right-4 max-w-sm max-h-32 bg-black/90 backdrop-blur rounded-lg border border-cyan-900/30 p-4 font-mono text-[10px] overflow-y-auto shadow-2xl z-50 pointer-events-none">
                 {logs.map((log, i) => (
                   <div key={i} className="text-cyan-500/80 mb-1 border-l-2 border-cyan-800 pl-2">{log}</div>
                 ))}
