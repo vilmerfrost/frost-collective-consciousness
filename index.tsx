@@ -6,6 +6,7 @@ import { FusedReport, AgentId, ProposedAction, MinorityReport } from './types';
 import { orchestrator } from './orchestrator';
 import { storage } from './storage';
 import { executeCloudActions } from './actions';
+import { generateMarkdown } from './markdown';
 
 // --- ICONS ---
 const Icon = ({ path, size = 16, color = "currentColor", className = "", style = {} }: any) => (
@@ -26,7 +27,8 @@ const ICONS = {
   shield: "M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z",
   chevronRight: "M9 18l6-6-6-6",
   chevronLeft: "M15 19l-7-7 7-7",
-  loader: "M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"
+  loader: "M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83",
+  download: "M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4 M7 10l5 5 5-5 M12 15V3"
 };
 
 // --- STYLES ---
@@ -240,6 +242,20 @@ function App() {
     setUiActions(r.proposedActions || []);
     setLogs([`LOADED HISTORY: ${r.id}`]);
   };
+  
+  const downloadMarkdown = () => {
+    if (!report) return;
+    const md = generateMarkdown(report);
+    const blob = new Blob([md], { type: 'text/markdown' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `fcc-report-${report.id.slice(0, 8)}.md`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
 
   // Safe DOM check for React
   const container = document.getElementById('app');
@@ -393,10 +409,20 @@ function App() {
                 <div className="flex justify-between items-start border-b border-white/10 pb-6 mb-8">
                   <div>
                     <h1 className="text-2xl font-bold text-white mb-2">Fused Intelligence Report</h1>
-                    <div className="flex gap-4 text-[11px] font-mono text-slate-500 uppercase">
+                    <div className="flex gap-4 text-[11px] font-mono text-slate-500 uppercase items-center">
                       <span>ID: {report.id.slice(0,8)}</span>
                       <span className="text-cyan-500">Confidence: {report.confidence}%</span>
                       <span className={report.mode === 'action' ? "text-red-400" : "text-slate-500"}>MODE: {report.mode}</span>
+                      
+                      {/* Markdown Download Button */}
+                      <button 
+                        onClick={downloadMarkdown}
+                        className="ml-4 flex items-center gap-1.5 text-slate-400 hover:text-white transition-colors border-l border-white/10 pl-4"
+                        title="Download Markdown Report"
+                      >
+                         <Icon path={ICONS.download} size={14} />
+                         <span className="text-[10px] font-bold">MD</span>
+                      </button>
                     </div>
                   </div>
                   <div className="flex -space-x-2">
