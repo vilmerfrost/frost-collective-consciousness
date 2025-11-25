@@ -32,7 +32,7 @@ export function generateMarkdown(report: FusedReport): string {
   if (report.minorityReports && report.minorityReports.length > 0) {
     blocks.push(`## Minority Reports`);
     report.minorityReports.forEach(mr => {
-      // Clean up the agent name if needed
+      // Clean up the agent name if needed (e.g. NODE_ALPHA -> ALPHA)
       const agentName = mr.agent.replace('NODE_', '');
       blocks.push(`**${agentName}:** ${mr.title}\n\n${mr.details}`);
     });

@@ -242,7 +242,7 @@ function App() {
     setUiActions(r.proposedActions || []);
     setLogs([`LOADED HISTORY: ${r.id}`]);
   };
-  
+
   const downloadMarkdown = () => {
     if (!report) return;
     const md = generateMarkdown(report);
