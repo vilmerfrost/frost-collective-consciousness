@@ -79,3 +79,28 @@ export type ActionExecutionResult = {
   success: boolean;
   message: string;
 };
+
+// --- GITHUB TYPES ---
+
+export interface GitHubContent {
+  name: string;
+  path: string;
+  sha: string;
+  size: number;
+  url: string;
+  html_url: string;
+  git_url: string;
+  download_url: string | null;
+  type: "file" | "dir";
+  _links: {
+    self: string;
+    git: string;
+    html: string;
+  };
+}
+
+export interface ExternalContext {
+  source: string; // e.g., "github:owner/repo"
+  content: string; // The flat text representation of the codebase
+  loadedAt: string;
+}

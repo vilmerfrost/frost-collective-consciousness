@@ -1,7 +1,7 @@
 
 import { GoogleGenAI } from "@google/genai";
 import { AGENTS } from "./config";
-import { FusedReport, AgentId, ProposedAction } from "./types";
+import { FusedReport, AgentId, ProposedAction, ExternalContext } from "./types";
 
 // Helper for generating UUIDs
 const generateId = () => {
@@ -22,7 +22,8 @@ export const orchestrator = {
     activeAgentIds: AgentId[],
     mode: "analysis" | "action",
     onLog: (msg: string) => void,
-    previousReport?: FusedReport | null
+    previousReport?: FusedReport | null,
+    externalContext?: ExternalContext | null
   ): Promise<FusedReport> {
     const apiKey = getApiKey();
     if (!apiKey) throw new Error("API_KEY_MISSING");
@@ -33,7 +34,7 @@ export const orchestrator = {
 
     onLog(`INITIALIZING_SWARM :: ${mode.toUpperCase()} MODE`);
 
-    // Prepare Context from Previous Run (if any)
+    // Prepare Context Strings
     let historyContext = "";
     if (previousReport) {
       historyContext = `
@@ -45,8 +46,16 @@ export const orchestrator = {
       ACTIONS: ${previousReport.nextActionsForHuman}
       EXECUTIVE SUMMARY: ${previousReport.executiveSummary}
       --- END PREVIOUS CONTEXT ---
-      
-      USER FOLLOW-UP:
+      `;
+    }
+
+    let externalKnowledgeBlock = "";
+    if (externalContext) {
+      onLog(`CONTEXT_INJECTION :: LOADING ${externalContext.source.toUpperCase()}`);
+      externalKnowledgeBlock = `
+      --- EXTERNAL KNOWLEDGE SOURCE: ${externalContext.source} ---
+      ${externalContext.content}
+      --- END EXTERNAL KNOWLEDGE ---
       `;
     }
 
@@ -56,7 +65,11 @@ export const orchestrator = {
       try {
         const response = await ai.models.generateContent({
           model: modelName,
-          contents: [{ parts: [{ text: `${historyContext} USER QUERY: ${query}` }] }],
+          contents: [{ parts: [{ text: `
+            ${historyContext} 
+            ${externalKnowledgeBlock}
+            USER QUERY: ${query}
+          ` }] }],
           config: { systemInstruction: agent.systemInstruction }
         });
         return { 
@@ -84,6 +97,8 @@ export const orchestrator = {
       ${contextBlock}
 
       ${historyContext ? 'PREVIOUS REPORT CONTEXT IS AVAILABLE ABOVE.' : ''}
+      ${externalKnowledgeBlock ? 'EXTERNAL CODEBASE CONTEXT IS AVAILABLE ABOVE. USE IT FOR CONCRETE REFERENCES.' : ''}
+      
       USER QUERY: "${query}"
       CURRENT MODE: "${mode}"
 
@@ -91,7 +106,7 @@ export const orchestrator = {
       CORE BEHAVIOR
       --------------------------------------------------
       You MUST:
-      - Re-evaluate the situation based on the agent inputs and user query.
+      - Re-evaluate the situation based on the agent inputs, external context (if any), and user query.
       - Produce a FULL new FCC report with ALL required sections.
       - In ACTION MODE, also produce machine-readable \`proposedActions\` JSON.
 
@@ -110,7 +125,7 @@ export const orchestrator = {
 
       **SECTION GUIDELINES:**
       - **OVERVIEW**: What is the tension or decision? (1-3 paragraphs)
-      - **ARCHITECTURE & INTEGRATIONS**: System design, data flow, relevant files (e.g. types.ts, config.ts). Do not hallucinate libraries.
+      - **ARCHITECTURE & INTEGRATIONS**: System design, data flow, relevant files (e.g. types.ts, config.ts). Do not hallucinate libraries. IF EXTERNAL CONTEXT IS PROVIDED, REFERENCE ACTUAL FILES FOUND IN THE CONTEXT.
       - **KEY FEATURES & WORKFLOWS**: Concrete workflows. Who does what? Through which UI?
       - **KEY RISKS**: Technical, Security, Ethical, Operational, UX.
       - **MINORITY REPORTS**: Explicit disagreements between ALPHA (Architecture), BETA (UX/Vision), OMEGA (Ethics/Safety).
@@ -227,8 +242,6 @@ export const orchestrator = {
     let actions: ProposedAction[] = [];
     if (mode === 'action') {
       try {
-        // Find the array part of proposedActions: [...]
-        // More robust regex to catch the JSON array even if there are slight format variations
         const jsonMatch = synthesisText.match(/proposedActions:\s*(\[\s*\{[\s\S]*\}\s*\])/);
         if (jsonMatch && jsonMatch[1]) {
           const parsed = JSON.parse(jsonMatch[1]);

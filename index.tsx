@@ -2,11 +2,12 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { createRoot } from 'react-dom/client';
 import { FCC_THEME, AGENTS } from './config';
-import { FusedReport, AgentId, ProposedAction, MinorityReport } from './types';
+import { FusedReport, AgentId, ProposedAction, MinorityReport, ExternalContext } from './types';
 import { orchestrator } from './orchestrator';
 import { storage } from './storage';
 import { executeCloudActions } from './actions';
 import { generateMarkdown } from './markdown';
+import { ingestGitHubRepo } from './github';
 
 // --- ICONS ---
 const Icon = ({ path, size = 16, color = "currentColor", className = "", style = {} }: any) => (
@@ -29,7 +30,8 @@ const ICONS = {
   chevronLeft: "M15 19l-7-7 7-7",
   loader: "M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83",
   download: "M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4 M7 10l5 5 5-5 M12 15V3",
-  send: "M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"
+  send: "M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z",
+  github: "M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22"
 };
 
 // --- STYLES ---
@@ -91,7 +93,6 @@ const MinorityReportCard: React.FC<{ report: MinorityReport }> = ({ report }) =>
 );
 
 const ActionRow: React.FC<{ action: ProposedAction }> = ({ action }) => {
-  // Status Colors
   let bgClass = "hover:bg-white/5";
   let borderClass = "border-white/10";
   let statusIcon = ICONS.cloud;
@@ -146,7 +147,6 @@ const ActionRow: React.FC<{ action: ProposedAction }> = ({ action }) => {
           </span>
         </div>
       </div>
-      {/* Result Message */}
       {action.resultMessage && (
         <div className="px-4 pb-3 pl-14 text-[10px] font-mono text-slate-500">
           &gt; {action.resultMessage}
@@ -172,9 +172,14 @@ function App() {
   const [executing, setExecuting] = useState(false);
   const [uiActions, setUiActions] = useState<ProposedAction[]>([]);
   
-  // Follow up input state
   const [followUpQuery, setFollowUpQuery] = useState('');
   const reportEndRef = useRef<HTMLDivElement>(null);
+
+  // GitHub Context State
+  const [githubRepo, setGithubRepo] = useState('');
+  const [githubToken, setGithubToken] = useState('');
+  const [isIngesting, setIsIngesting] = useState(false);
+  const [externalContext, setExternalContext] = useState<ExternalContext | null>(null);
 
   useEffect(() => {
     storage.listRecentReports().then(setHistory);
@@ -190,32 +195,51 @@ function App() {
     setLogs(prev => [`${new Date().toLocaleTimeString().split(' ')[0]} :: ${msg}`, ...prev.slice(0, 8)]);
   };
 
+  const handleIngestGitHub = async () => {
+    if (!githubRepo.includes('/')) {
+        addLog("ERROR: Invalid Repo Format");
+        return;
+    }
+    setIsIngesting(true);
+    addLog(`GITHUB_INGEST :: TARGET ${githubRepo}`);
+    
+    try {
+        const content = await ingestGitHubRepo(githubRepo, githubToken);
+        setExternalContext({
+            source: `github:${githubRepo}`,
+            content: content,
+            loadedAt: new Date().toISOString()
+        });
+        addLog("GITHUB_INGEST :: SUCCESS");
+    } catch (e: any) {
+        addLog(`GITHUB_INGEST :: FAILED - ${e.message}`);
+    } finally {
+        setIsIngesting(false);
+    }
+  };
+
   const handleRun = async (textOverride?: string) => {
     const inputText = textOverride || query;
     if (!inputText.trim() || isProcessing) return;
     
     setIsProcessing(true);
     
-    // If we have a current report, we are doing a follow-up.
-    // Store it as previous context before we wipe the UI for the new run.
     const previousContext = report; 
 
     setReport(null);
     setUiActions([]);
     setLogs([]);
-    
-    // Clear inputs
     setQuery('');
     setFollowUpQuery('');
 
     try {
-      // Pass previousContext to orchestrator
       const result = await orchestrator.runCollective(
         inputText, 
         activeAgentIds, 
         mode, 
         addLog, 
-        previousContext
+        previousContext,
+        externalContext // Pass the ingested context
       );
       
       setReport(result);
@@ -282,7 +306,6 @@ function App() {
     URL.revokeObjectURL(url);
   };
 
-  // Safe DOM check for React
   const container = document.getElementById('app');
   if (!container) return null;
 
@@ -354,7 +377,7 @@ function App() {
         <div className="flex-1 flex p-6 gap-6 overflow-hidden">
           
           {/* COLUMN 1: CONTROLS */}
-          <div className="w-96 flex flex-col gap-6 flex-shrink-0">
+          <div className="w-96 flex flex-col gap-6 flex-shrink-0 overflow-y-auto pb-20">
             {/* Agents */}
             <div className="glass-panel rounded-xl p-6 flex flex-col gap-4">
               <span className="text-[11px] font-bold text-slate-500 uppercase tracking-widest">Neural Nodes</span>
@@ -381,8 +404,68 @@ function App() {
               </div>
             </div>
 
+            {/* EXTERNAL KNOWLEDGE (GITHUB) */}
+            <div className="glass-panel rounded-xl p-6 flex flex-col gap-4">
+               <div className="flex items-center justify-between">
+                   <span className="text-[11px] font-bold text-slate-500 uppercase tracking-widest flex items-center gap-2">
+                       <Icon path={ICONS.github} size={14} />
+                       External Knowledge
+                   </span>
+                   {externalContext && (
+                       <span className="text-[9px] text-green-400 border border-green-500/30 px-1.5 py-0.5 rounded bg-green-500/10">LINKED</span>
+                   )}
+               </div>
+               
+               {!externalContext ? (
+                 <div className="flex flex-col gap-3">
+                   <input 
+                     type="text" 
+                     className="bg-slate-900/50 border border-white/10 rounded px-3 py-2 text-[11px] text-slate-300 placeholder-slate-600 focus:outline-none focus:border-cyan-500/30"
+                     placeholder="owner/repo"
+                     value={githubRepo}
+                     onChange={(e) => setGithubRepo(e.target.value)}
+                   />
+                   <div className="flex gap-2">
+                       <input 
+                         type="password" 
+                         className="flex-1 bg-slate-900/50 border border-white/10 rounded px-3 py-2 text-[11px] text-slate-300 placeholder-slate-600 focus:outline-none focus:border-cyan-500/30"
+                         placeholder="Token (Optional)"
+                         value={githubToken}
+                         onChange={(e) => setGithubToken(e.target.value)}
+                       />
+                       <button 
+                         onClick={handleIngestGitHub}
+                         disabled={isIngesting || !githubRepo}
+                         className="bg-slate-800 hover:bg-slate-700 text-white px-3 rounded text-[10px] font-bold transition-colors disabled:opacity-50"
+                       >
+                         {isIngesting ? '...' : 'INGEST'}
+                       </button>
+                   </div>
+                   <p className="text-[9px] text-slate-600 leading-tight">
+                       Connects recursively to public repos (or private with token). Limits depth to prevent overflow.
+                   </p>
+                 </div>
+               ) : (
+                 <div className="bg-slate-900/50 border border-white/10 rounded p-3 relative group">
+                     <div className="flex items-center gap-2 mb-1">
+                         <Icon path={ICONS.github} size={12} className="text-slate-400" />
+                         <span className="text-xs text-slate-200 font-mono truncate">{externalContext.source}</span>
+                     </div>
+                     <div className="text-[10px] text-slate-500">
+                         Context loaded at {new Date(externalContext.loadedAt).toLocaleTimeString()}
+                     </div>
+                     <button 
+                       onClick={() => setExternalContext(null)}
+                       className="absolute top-2 right-2 text-slate-600 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity"
+                     >
+                        ×
+                     </button>
+                 </div>
+               )}
+            </div>
+
             {/* Input */}
-            <div className="glass-panel rounded-xl p-6 flex flex-col gap-4 flex-1">
+            <div className="glass-panel rounded-xl p-6 flex flex-col gap-4 flex-1 min-h-[250px]">
                <div className="flex bg-slate-900/80 p-1 rounded-lg border border-white/10">
                 <button 
                   onClick={() => setMode('analysis')}
@@ -446,7 +529,6 @@ function App() {
                         <span className="text-cyan-500">Confidence: {report.confidence}%</span>
                         <span className={report.mode === 'action' ? "text-red-400" : "text-slate-500"}>MODE: {report.mode}</span>
                         
-                        {/* Markdown Download Button */}
                         <button 
                           onClick={downloadMarkdown}
                           className="ml-4 flex items-center gap-1.5 text-slate-400 hover:text-white transition-colors border-l border-white/10 pl-4"
@@ -480,7 +562,6 @@ function App() {
                       
                       <ReportSection title="Key Risks" content={report.keyRisks} />
 
-                      {/* Minority Reports */}
                       {report.minorityReports.length > 0 && (
                         <div className="my-10">
                           <div className="grid grid-cols-1 gap-4">
@@ -537,7 +618,7 @@ function App() {
                   </div>
                 </div>
 
-                {/* --- FOLLOW-UP INPUT BAR (Like standard LLMs) --- */}
+                {/* --- FOLLOW-UP INPUT BAR --- */}
                 <div className="absolute bottom-0 left-0 right-0 bg-slate-950/80 backdrop-blur-md border-t border-white/10 p-4 flex gap-3 items-center z-40">
                   <div className="flex-1 relative">
                     <input 
