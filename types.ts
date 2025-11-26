@@ -11,6 +11,7 @@ export interface AgentProfile {
   icon: string;
   description: string;
   systemInstruction: string;
+  model: string; // The underlying model (e.g. Gemini 2.5, Claude 3.5)
 }
 
 export type ProposedActionTarget = 
@@ -68,6 +69,7 @@ export interface FusedReport {
   participatingAgents: AgentId[];
   mode: "analysis" | "action";
   createdAt: string; // ISO string
+  externalContext?: ExternalContext; // The context used to generate this report
   meta: {
     executionTimeMs: number;
     model: string;

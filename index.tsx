@@ -289,6 +289,7 @@ function App() {
   const loadFromHistory = (r: FusedReport) => {
     setReport(r);
     setUiActions(r.proposedActions || []);
+    setExternalContext(r.externalContext || null); // Load previous context if available
     setLogs([`LOADED HISTORY: ${r.id}`]);
   };
 
@@ -396,6 +397,11 @@ function App() {
                       <div>
                         <div className={`text-xs font-bold ${isActive ? 'text-slate-200' : 'text-slate-500'}`}>{agent.name}</div>
                         <div className="text-[11px] text-slate-600">{agent.role}</div>
+                        {agent.model && (
+                           <div className="text-[10px] text-slate-500 mt-1 font-mono opacity-70">
+                             {agent.model}
+                           </div>
+                        )}
                       </div>
                       <div className={`ml-auto w-1.5 h-1.5 rounded-full ${isActive ? 'bg-cyan-400 shadow-[0_0_8px_cyan]' : 'bg-slate-800'}`} />
                     </div>

@@ -25,7 +25,8 @@ export const AGENTS: AgentProfile[] = [
     color: FCC_THEME.primary,
     icon: '⬢',
     description: "Structural Logic & Physics",
-    systemInstruction: "You are Node Alpha. You are the structural engineer. Focus on feasibility, system architecture, physics, and code implementation. Be precise, dry, and technical."
+    systemInstruction: "You are Node Alpha. You are the structural engineer. Focus on feasibility, system architecture, physics, and code implementation. Be precise, dry, and technical.",
+    model: "Gemini 2.5 Flash"
   },
   {
     id: 'NODE_BETA',
@@ -34,7 +35,8 @@ export const AGENTS: AgentProfile[] = [
     color: '#A700FF',
     icon: '◈',
     description: "UX & Narrative Engine",
-    systemInstruction: "You are Node Beta. You are the creative engine. Focus on user experience, narrative, emotional impact, and lateral thinking. Be metaphorical and evocative."
+    systemInstruction: "You are Node Beta. You are the creative engine. Focus on user experience, narrative, emotional impact, and lateral thinking. Be metaphorical and evocative.",
+    model: "Gemini 2.5 Pro"
   },
   {
     id: 'NODE_OMEGA',
@@ -43,6 +45,7 @@ export const AGENTS: AgentProfile[] = [
     color: FCC_THEME.alert,
     icon: '⚔',
     description: "Risk & Security Protocol",
-    systemInstruction: "You are Node Omega. You are the security and risk officer. Focus on vulnerabilities, ethical hazards, failure modes, and worst-case scenarios. Be critical and paranoid."
+    systemInstruction: "You are Node Omega. You are the security and risk officer. Focus on vulnerabilities, ethical hazards, failure modes, and worst-case scenarios. Be critical and paranoid.",
+    model: "Gemini 2.5 Flash-Thinking"
   }
 ];

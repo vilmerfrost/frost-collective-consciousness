@@ -107,13 +107,26 @@ export const orchestrator = {
       --------------------------------------------------
       You MUST:
       - Re-evaluate the situation based on the agent inputs, external context (if any), and user query.
+      - Calculate a **CONFIDENCE SCORE** (0-100) representing the alignment of agents and clarity of the solution.
       - Produce a FULL new FCC report with ALL required sections.
       - In ACTION MODE, also produce machine-readable \`proposedActions\` JSON.
 
       --------------------------------------------------
-      STRUCTURED FCC REPORT – MANDATORY SECTIONS
+      OUTPUT FORMAT (STRICT)
       --------------------------------------------------
-      You MUST output **exactly these seven section headers**, in this exact order, ALL CAPS, each on its own line, followed by a blank line, with content underneath each:
+      
+      **FIRST LINE MUST BE:**
+      CONFIDENCE_SCORE: <integer 0-100>
+      
+      (Calculation Guide: 
+       - 90-100: Total consensus, clear query, full context.
+       - 70-89: Minor disagreements, feasible solution.
+       - 50-69: Major architectural dissent or vague query.
+       - <50: Critical ethical blocking or impossible request.)
+
+      **THEN LEAVE A BLANK LINE.**
+
+      **THEN OUTPUT exactly these seven section headers**, in this exact order, ALL CAPS, each on its own line, followed by a blank line:
 
       1. OVERVIEW
       2. ARCHITECTURE & INTEGRATIONS
@@ -191,6 +204,15 @@ export const orchestrator = {
     // 3. Parsing Logic
     const report: Partial<FusedReport> = {};
     
+    // Extract Confidence Score
+    let confidence = 85; // Default fallback
+    const confidenceMatch = synthesisText.match(/^CONFIDENCE_SCORE:\s*(\d+)/m);
+    if (confidenceMatch && confidenceMatch[1]) {
+        confidence = Math.min(100, Math.max(0, parseInt(confidenceMatch[1], 10)));
+        // Remove the confidence line from the text to avoid polluting the sections
+        synthesisText = synthesisText.replace(/^CONFIDENCE_SCORE:\s*\d+\s*/, '').trim();
+    }
+
     // Helper to extract section content
     const getSection = (header: string, nextHeader?: string) => {
       // Normalize to find the header (handle potential numbering "1. OVERVIEW" vs "OVERVIEW")
@@ -263,7 +285,7 @@ export const orchestrator = {
     return {
       id: generateId(),
       query,
-      confidence: 85,
+      confidence: confidence, // Use the dynamic score
       overview: report.overview || "System Error: Output Missing",
       architectureAndIntegrations: report.architectureAndIntegrations || "",
       keyFeaturesAndWorkflows: report.keyFeaturesAndWorkflows || "",
@@ -275,6 +297,7 @@ export const orchestrator = {
       participatingAgents: activeAgentIds,
       mode,
       createdAt: new Date().toISOString(),
+      externalContext: externalContext || undefined, // PERSIST CONTEXT
       meta: {
         executionTimeMs: Math.round(performance.now() - startTime),
         model: modelName
