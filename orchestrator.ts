@@ -1,7 +1,9 @@
 
-import { GoogleGenAI } from "@google/genai";
 import { AGENTS } from "./config";
 import { FusedReport, AgentId, ProposedAction, ExternalContext } from "./types";
+import { callQwen } from "@/lib/fcc/clients/qwen";
+import { callGemini } from "@/lib/fcc/clients/gemini";
+import { callLlama } from "@/lib/fcc/clients/llama";
 
 // Helper for generating UUIDs
 const generateId = () => {
@@ -11,9 +13,18 @@ const generateId = () => {
   return Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
 };
 
-const getApiKey = () => {
-  try { return process.env.API_KEY; } 
-  catch (e) { return ""; }
+// Map agent IDs to their respective model clients
+const getAgentClient = (agentId: AgentId) => {
+  switch (agentId) {
+    case "NODE_ALPHA":
+      return callQwen;
+    case "NODE_BETA":
+      return callGemini;
+    case "NODE_OMEGA":
+      return callLlama;
+    default:
+      return callGemini; // Fallback
+  }
 };
 
 export const orchestrator = {
@@ -25,12 +36,8 @@ export const orchestrator = {
     previousReport?: FusedReport | null,
     externalContext?: ExternalContext | null
   ): Promise<FusedReport> {
-    const apiKey = getApiKey();
-    if (!apiKey) throw new Error("API_KEY_MISSING");
-
-    const ai = new GoogleGenAI({ apiKey });
     const startTime = performance.now();
-    const modelName = 'gemini-2.5-flash';
+    const modelName = 'FCC-Multi-Node (Qwen/Gemini/Llama)';
 
     onLog(`INITIALIZING_SWARM :: ${mode.toUpperCase()} MODE`);
 
@@ -59,26 +66,58 @@ export const orchestrator = {
       `;
     }
 
-    // 1. Parallel Agent Execution
+    // 1. Parallel Agent Execution - using new free model clients
     const activeAgents = AGENTS.filter(a => activeAgentIds.includes(a.id));
     const agentPromises = activeAgents.map(async (agent) => {
       try {
-        const response = await ai.models.generateContent({
-          model: modelName,
-          contents: [{ parts: [{ text: `
+        const client = getAgentClient(agent.id);
+        const agentPrompt = `
             ${historyContext} 
             ${externalKnowledgeBlock}
             USER QUERY: ${query}
-          ` }] }],
-          config: { systemInstruction: agent.systemInstruction }
-        });
+          `;
+        const content = await client(agentPrompt, agent.systemInstruction);
         return { 
           name: agent.name, 
           role: agent.role, 
-          content: response.text || "NO_DATA" 
+          content: content || "NO_DATA" 
         };
       } catch (e) {
-        return { name: agent.name, role: agent.role, content: "ERROR_OFFLINE" };
+        const errorMsg = e instanceof Error ? e.message : "ERROR_OFFLINE";
+        onLog(`NODE_ERROR :: ${agent.name} - ${errorMsg}`);
+        
+        // FCC v4 Integration: Trigger diagnosis on agent failure (optional, non-blocking)
+        // Uncomment to enable automatic FCC v4 diagnosis on agent failures:
+        /*
+        try {
+          const { diagnosePipelineStage } = await import('./fcc/integrations/nightFactory/v4');
+          const fccReport = await diagnosePipelineStage(
+            {
+              stage: agent.name,
+              query: `Diagnose why ${agent.name} failed: ${errorMsg}`,
+              logs: errorMsg,
+              stackTrace: e instanceof Error ? e.stack : undefined,
+              agentId: agent.id,
+              relatedFiles: ['orchestrator.ts', `lib/fcc/clients/${agent.id.toLowerCase()}.ts`],
+            }
+          );
+          onLog(`FCC_V4_DIAGNOSIS :: ${agent.name} - Risk: ${fccReport.overallRiskScore}, Findings: ${fccReport.findings.length}`);
+          if (fccReport.recommendations && fccReport.recommendations.length > 0) {
+            onLog(`FCC_V4_RECOMMENDATIONS :: ${agent.name} - Top: ${fccReport.recommendations[0]?.title}`);
+          }
+        } catch (fccError) {
+          // FCC diagnosis failed, continue without it
+          console.warn('[FCC v4] Failed to diagnose agent failure:', fccError);
+        }
+        */
+        
+        // TODO: Add FCC v4 hooks for:
+        // - Pre-flight diagnosis before running agent: diagnoseBeforeStage()
+        // - Post-flight diagnosis after agent completes: diagnoseAfterStage()
+        // - Cross-agent audit: auditAgentOutputs()
+        // - Failure prediction: predictFailures()
+        
+        return { name: agent.name, role: agent.role, content: `ERROR: ${errorMsg}` };
       }
     });
 
@@ -190,15 +229,28 @@ export const orchestrator = {
 
     onLog("SYNTHESIS_ENGINE :: PROCESSING VECTORS...");
     
+    // Use Gemini (BETA) for synthesis as it's good at combining perspectives
     let synthesisText = "";
     try {
-      const synthesisResponse = await ai.models.generateContent({
-        model: modelName,
-        contents: [{ parts: [{ text: synthesisPrompt }] }]
-      });
-      synthesisText = synthesisResponse.text || "";
+      synthesisText = await callGemini(synthesisPrompt, "You are the Frost Collective Consciousness synthesis engine. Combine multiple perspectives into coherent, actionable reports.");
     } catch (e) {
-      throw e;
+      // FCC Integration: Trigger diagnosis on synthesis failure
+      // Uncomment to enable automatic FCC diagnosis on synthesis failures:
+      /*
+      try {
+        const { triggerFCCOnFailure } = await import('./fcc/integrations/nightFactoryHook');
+        const fccReport = await triggerFCCOnFailure(
+          'synthesis',
+          `Synthesis failed: ${e instanceof Error ? e.message : "Unknown error"}`,
+          e instanceof Error ? e.stack : undefined,
+          ['orchestrator.ts']
+        );
+        onLog(`FCC_DIAGNOSIS :: Synthesis failure - Risk: ${fccReport.overallRiskScore}`);
+      } catch (fccError) {
+        console.warn('[FCC] Failed to diagnose synthesis failure:', fccError);
+      }
+      */
+      throw new Error(`Synthesis failed: ${e instanceof Error ? e.message : "Unknown error"}`);
     }
 
     // 3. Parsing Logic

@@ -15,6 +15,39 @@ const IGNORED_EXTENSIONS = [
 ];
 
 /**
+ * Parses various GitHub URL formats to extract owner and repo.
+ * Handles:
+ * - https://github.com/owner/repo/tree/branch/path
+ * - https://github.com/owner/repo
+ * - github.com/owner/repo
+ * - owner/repo
+ */
+function parseGitHubRepo(input: string): { owner: string; repo: string } {
+  // Remove leading/trailing whitespace
+  input = input.trim();
+  
+  // Handle full GitHub URLs
+  const githubUrlMatch = input.match(/github\.com[/:]([^\/]+)\/([^\/\s?#]+)/);
+  if (githubUrlMatch) {
+    return {
+      owner: githubUrlMatch[1],
+      repo: githubUrlMatch[2].replace(/\.git$/, '') // Remove .git suffix if present
+    };
+  }
+  
+  // Handle simple owner/repo format
+  const parts = input.split('/').filter(p => p.length > 0);
+  if (parts.length >= 2) {
+    return {
+      owner: parts[0],
+      repo: parts[1].replace(/\.git$/, '') // Remove .git suffix if present
+    };
+  }
+  
+  throw new Error(`Invalid repository format: "${input}". Expected format: 'owner/repo' or a GitHub URL.`);
+}
+
+/**
  * Fetches the content of a GitHub repository recursively (up to a depth limit).
  * Returns a formatted string suitable for LLM context injection.
  */
@@ -22,8 +55,7 @@ export async function ingestGitHubRepo(
   ownerRepo: string, 
   token?: string
 ): Promise<string> {
-  const [owner, repo] = ownerRepo.split('/');
-  if (!owner || !repo) throw new Error("Invalid repository format. Use 'owner/repo'.");
+  const { owner, repo } = parseGitHubRepo(ownerRepo);
 
   const headers: Record<string, string> = {
     "Accept": "application/vnd.github.v3+json",
